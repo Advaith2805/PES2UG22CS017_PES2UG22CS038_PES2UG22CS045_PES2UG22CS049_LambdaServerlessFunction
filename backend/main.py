@@ -1,7 +1,9 @@
-from fastapi import FastAPI, Depends, HTTPException
+import docker
+import os
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from models import Base, Function
-from schemas import FunctionCreate, FunctionRead
+from schemas import FunctionCreate, FunctionRead, FunctionExecute
 from database import engine, SessionLocal
 
 # Create the database tables
@@ -9,7 +11,9 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Serverless Function API")
 
-# Dependency to get a DB session for each request
+client = docker.from_env()  # Initialize Docker client
+
+# Dependency to get a DB session
 def get_db():
     db = SessionLocal()
     try:
@@ -17,7 +21,6 @@ def get_db():
     finally:
         db.close()
 
-# Root endpoint
 @app.get("/")
 async def root():
     return {"message": "Serverless Function API Running!"}
@@ -70,3 +73,40 @@ def delete_function(function_id: int, db: Session = Depends(get_db)):
     db.delete(function)
     db.commit()
     return {"detail": "Function deleted"}
+
+@app.post("/execute/{function_id}")
+def execute_function(function_id: int, db: Session = Depends(get_db)):
+    function = db.query(Function).filter(Function.id == function_id).first()
+    if function is None:
+        raise HTTPException(status_code=404, detail="Function not found")
+
+    function_code = function.code
+    extension = function.language  # Assuming the database stores 'python' or 'javascript'
+
+    unique_id = str(uuid.uuid4())
+    function_filename = f"/tmp/{unique_id}.{extension}"
+
+    with open(function_filename, "w") as f:
+        f.write(function_code)
+
+    timeout = 5  # Max execution time in seconds
+
+    if extension == "python":
+        command = f"timeout {timeout} python /sandbox/function.py"
+        image = "function-exec-python"
+    elif extension == "javascript":
+        command = f"timeout {timeout} node /sandbox/function.js"
+        image = "function-exec-node"
+    else:
+        raise HTTPException(status_code=400, detail="Unsupported language")
+
+    try:
+        container = client.containers.run(
+            image,
+            command,
+            volumes={function_filename: {'bind': f"/sandbox/function.{extension}", 'mode': 'ro'}},
+            remove=True
+        )
+        return {"output": container}
+    except docker.errors.ContainerError as e:
+        raise HTTPException(status_code=500, detail=f"Execution error: {e}")

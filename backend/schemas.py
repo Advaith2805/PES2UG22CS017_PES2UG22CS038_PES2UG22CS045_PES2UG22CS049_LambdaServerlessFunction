@@ -13,5 +13,9 @@ class FunctionCreate(FunctionBase):
 class FunctionRead(FunctionBase):
     id: int
 
-    class Config:
-        orm_mode = True  # Tells Pydantic to read data even if it's not a dict
+    model_config = {
+        "from": True  # Enable ORM mode for compatibility with SQLAlchemy models
+    }
+
+class FunctionExecute(BaseModel):
+    input_data: str
