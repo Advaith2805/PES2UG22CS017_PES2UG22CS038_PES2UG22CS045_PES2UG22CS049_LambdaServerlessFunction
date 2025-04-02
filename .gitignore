@@ -1,0 +1,23 @@
+# Ignore Python files
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.env
+.DS_Store
+
+# Ignore Node.js files
+node_modules/
+npm-debug.log
+package-lock.json
+
+# Ignore Docker files
+*.dockerignore
+
+# Ignore VS Code settings
+.vscode/
+
+# Ignore build files
+dist/
+build/
+.cache/
