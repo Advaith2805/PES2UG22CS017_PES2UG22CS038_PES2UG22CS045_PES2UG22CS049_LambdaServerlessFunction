@@ -5,6 +5,7 @@ class FunctionBase(BaseModel):
     route: str
     language: str
     timeout: int
+    code: str
 
 class FunctionCreate(FunctionBase):
     # Inherits all fields for creating a function

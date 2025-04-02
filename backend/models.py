@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, Integer, String, Text
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
@@ -11,3 +11,4 @@ class Function(Base):
     route = Column(String, unique=True, index=True)
     language = Column(String, index=True)
     timeout = Column(Integer)  # Timeout in seconds
+    code = Column(Text)
