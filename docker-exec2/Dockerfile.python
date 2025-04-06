@@ -1,4 +1,5 @@
-FROM python:3.9-slim
-WORKDIR /app
-COPY function.py /app/
-CMD ["python", "function.py"]
+# docker/python_runner/Dockerfile
+FROM python:3.10-slim
+WORKDIR /sandbox
+# We do not copy any code here because code is provided at runtime via a volume mount.
+CMD ["python", "/sandbox/function.py"]  # This can be overridden by the executor command.

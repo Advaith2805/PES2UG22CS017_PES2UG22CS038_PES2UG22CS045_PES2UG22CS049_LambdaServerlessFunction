@@ -1,4 +1,5 @@
-FROM node:18-alpine
-WORKDIR /app
-COPY function.js /app/
-CMD ["node", "function.js"]
+# docker/node_runner/Dockerfile
+FROM node:18
+WORKDIR /sandbox
+# Code will be mounted dynamically, so no COPY instruction is used.
+CMD ["node", "/sandbox/function.js"]  # Default command; executor can override.

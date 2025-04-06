@@ -8,14 +8,14 @@ class FunctionBase(BaseModel):
     code: str
 
 class FunctionCreate(FunctionBase):
-    # Inherits all fields for creating a function
+   
     pass
 
 class FunctionRead(FunctionBase):
     id: int
 
     model_config = {
-        "from": True  # Enable ORM mode for compatibility with SQLAlchemy models
+        "from": True  
     }
 
 class FunctionExecute(BaseModel):

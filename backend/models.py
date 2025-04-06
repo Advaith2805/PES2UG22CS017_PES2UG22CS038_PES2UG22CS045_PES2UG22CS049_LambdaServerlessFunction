@@ -10,5 +10,5 @@ class Function(Base):
     name = Column(String, unique=True, index=True)
     route = Column(String, unique=True, index=True)
     language = Column(String, index=True)
-    timeout = Column(Integer)  # Timeout in seconds
+    timeout = Column(Integer)  
     code = Column(Text)
