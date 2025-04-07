@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from models import Base, Function  # Ensure Base is defined in models
+from models import Base, Function  # Ensure Base is defined in your models.py
 from database import engine, SessionLocal
 from schemas import FunctionRead, FunctionCreate  # Your Pydantic schemas
 from pydantic import BaseModel
@@ -12,11 +12,27 @@ import docker
 import shutil
 import io
 import tarfile
+import logging
 
-# Create DB tables if not already created
+# Prometheus client for metrics
+from prometheus_client import Summary, Gauge, make_asgi_app
+
+# Set up basic logging
+logging.basicConfig(level=logging.INFO)
+
+# Define Prometheus metrics:
+execution_time = Summary('function_execution_seconds', 'Time spent executing functions', ['tech', 'language'])
+container_cpu_usage = Gauge('container_cpu_usage', 'CPU usage of container', ['container_name'])
+container_memory_usage = Gauge('container_memory_usage', 'Memory usage of container', ['container_name'])
+
+# Mount Prometheus metrics endpoint on /metrics
+metrics_app = make_asgi_app()
+
+# Create the database tables if not already created
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Serverless Function API")
+app.mount("/metrics", metrics_app)  # Prometheus will scrape metrics from /metrics
 
 # Initialize Docker client
 client = docker.from_env()
@@ -25,7 +41,6 @@ client = docker.from_env()
 # Keys: "docker_python", "docker_javascript", "gvisor_python", "gvisor_javascript"
 container_pools = {}
 
-# Dependency to get a DB session
 def get_db():
     db = SessionLocal()
     try:
@@ -33,17 +48,18 @@ def get_db():
     finally:
         db.close()
 
-# Response model for execution result
+# Response model for execution result, including container name.
 class ExecutionResult(BaseModel):
     output: str
     error: Optional[str] = None
+    container_name: Optional[str] = None
 
 # --- Helper Functions ---
 
 def create_container_pool(language: str, count: int, runtime: Optional[str] = None):
     """
     Creates a pool of pre-warmed containers for the specified language.
-    Optionally, a runtime can be specified (e.g., "runsc" for gVisor).
+    If 'runtime' is provided (e.g., "runsc" for gVisor), it is used.
     """
     pool = []
     if language == "python":
@@ -51,9 +67,8 @@ def create_container_pool(language: str, count: int, runtime: Optional[str] = No
     elif language == "javascript":
         image = "function-exec-node"
     else:
-        raise Exception("Unsupported language for pool creation.")
+        raise HTTPException(status_code=400, detail="Unsupported language for pool creation.")
     
-    # Use runtime value in container name to differentiate pools.
     pool_type = runtime if runtime else "docker"
     
     for i in range(count):
@@ -62,14 +77,18 @@ def create_container_pool(language: str, count: int, runtime: Optional[str] = No
             container = client.containers.run(
                 image=image,
                 name=container_name,
-                command="tail -f /dev/null",  # Keeps container running
+                command="tail -f /dev/null",  # Keeps container alive
                 detach=True,
                 tty=True,
                 auto_remove=False,
                 runtime=runtime  # If runtime is None, Docker uses default (runc)
             )
-        except docker.errors.APIError:
-            container = client.containers.get(container_name)
+        except docker.errors.APIError as e:
+            # If container exists, retrieve it.
+            try:
+                container = client.containers.get(container_name)
+            except docker.errors.NotFound:
+                raise HTTPException(status_code=500, detail=f"Container {container_name} could not be created: {str(e)}")
         pool.append(container)
     return pool
 
@@ -87,11 +106,14 @@ def create_tar_for_file(file_path: str, arcname: str) -> bytes:
 @app.on_event("startup")
 def startup_event():
     global container_pools
-    # Create 2 containers per pool (adjust count as needed)
+    # Create 2 containers per pool (adjust as needed)
     container_pools["docker_python"] = create_container_pool("python", 2)
     container_pools["docker_javascript"] = create_container_pool("javascript", 2)
-    container_pools["gvisor_python"] = create_container_pool("python", 2, runtime="runsc")
-    container_pools["gvisor_javascript"] = create_container_pool("javascript", 2, runtime="runsc")
+    try:
+        container_pools["gvisor_python"] = create_container_pool("python", 2, runtime="runsc")
+        container_pools["gvisor_javascript"] = create_container_pool("javascript", 2, runtime="runsc")
+    except HTTPException as e:
+        logging.warning(f"Warning: {e.detail}. gVisor pools not created.")
 
 # --- CRUD Endpoints ---
 
@@ -142,28 +164,25 @@ def delete_function(function_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"detail": "Function deleted"}
 
-# --- Execution Endpoint with Second Virtualization Support ---
+# --- Execution Endpoint with Metrics and Runtime Selection ---
 @app.post("/execute/{function_id}", response_model=ExecutionResult)
 def execute_function(
     function_id: int,
     tech: str = Query("docker", description="Virtualization technology: 'docker' (default) or 'gvisor'"),
     db: Session = Depends(get_db)
 ):
-    # Fetch function metadata and code from the database
+    # Fetch function metadata and code from the database.
     function = db.query(Function).filter(Function.id == function_id).first()
     if function is None:
         raise HTTPException(status_code=404, detail="Function not found")
     
-    # Map language to file extension
-    ext_map = {
-        "python": "py",
-        "javascript": "js"
-    }
+    # Map language to file extension.
+    ext_map = {"python": "py", "javascript": "js"}
     file_ext = ext_map.get(function.language)
     if not file_ext:
         raise HTTPException(status_code=400, detail="Unsupported language")
     
-    # Create a temporary directory for packaging the function code
+    # Create a temporary directory for packaging the function code.
     unique_id = str(uuid.uuid4())
     temp_dir = os.path.join(tempfile.gettempdir(), unique_id)
     os.makedirs(temp_dir, exist_ok=True)
@@ -171,12 +190,11 @@ def execute_function(
     filename = f"function.{file_ext}"
     host_file_path = os.path.join(temp_dir, filename)
     
-    # Write the function code (from the database) into a file
+    # Write the function code (from the database) into a file.
     with open(host_file_path, "w") as f:
         f.write(function.code)
     
-    # Select the correct pre-warmed container pool based on language and tech
-    pool_key = None
+    # Determine which container pool to use.
     if function.language == "python":
         pool_key = "gvisor_python" if tech.lower() == "gvisor" else "docker_python"
     elif function.language == "javascript":
@@ -190,34 +208,49 @@ def execute_function(
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise HTTPException(status_code=500, detail="No available container in pool")
     
-    # For simplicity, select the first container in the pool (can implement round-robin later)
+    # Select the first container from the pool.
     container = pool[0]
+    logging.info(f"Routing execution to container: {container.name}")
     
-    # Package the file into a tar archive for copying
+    # Package the file into a tar archive for copying.
     archive_data = create_tar_for_file(host_file_path, filename)
     
     try:
-        # Copy the tar archive into the container's /sandbox directory
+        # Copy the tar archive into the container's /sandbox directory.
         container.put_archive("/sandbox", archive_data)
     except Exception as e:
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise HTTPException(status_code=500, detail=f"Failed to copy code into container: {str(e)}")
     
-    # Determine the command to run inside the container based on language
+    # Determine the command to run inside the container based on language.
     if function.language == "python":
         exec_cmd = ["python", f"/sandbox/{filename}"]
     elif function.language == "javascript":
         exec_cmd = ["node", f"/sandbox/{filename}"]
     
     try:
-        # Execute the command inside the pre-warmed container
-        exec_result = container.exec_run(exec_cmd, demux=True)
+        # Measure execution time using the Prometheus Summary.
+        with execution_time.labels(tech=tech.lower(), language=function.language).time():
+            exec_result = container.exec_run(exec_cmd, demux=True)
+        
         stdout, stderr = exec_result.output
         output = stdout.decode() if stdout else ""
         error = stderr.decode() if stderr else ""
-        return ExecutionResult(output=output, error=error)
+        
+        # Retrieve container stats for CPU and memory usage.
+        try:
+            stats = container.stats(stream=False)
+            cpu_usage = stats.get("cpu_stats", {}).get("cpu_usage", {}).get("total_usage", 0)
+            mem_usage = stats.get("memory_stats", {}).get("usage", 0)
+            container_cpu_usage.labels(container_name=container.name).set(cpu_usage)
+            container_memory_usage.labels(container_name=container.name).set(mem_usage)
+            logging.info(f"Container {container.name} stats - CPU: {cpu_usage}, Memory: {mem_usage}")
+        except Exception as stats_error:
+            logging.warning(f"Could not retrieve stats for container {container.name}: {stats_error}")
+        
+        return ExecutionResult(output=output, error=error, container_name=container.name)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Execution failed: {str(e)}")
     finally:
-        # Clean up the temporary directory
+        # Clean up the temporary directory.
         shutil.rmtree(temp_dir, ignore_errors=True)
