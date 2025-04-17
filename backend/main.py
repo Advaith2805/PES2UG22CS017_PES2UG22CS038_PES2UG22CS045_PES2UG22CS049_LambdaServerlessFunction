@@ -1,21 +1,21 @@
-from fastapi import FastAPI, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from fastapi import FastAPI, Depends, HTTPException, Query # type: ignore
+from sqlalchemy.orm import Session # type: ignore
 from models import Base, Function  # Ensure Base is defined in your models.py
 from database import engine, SessionLocal
 from schemas import FunctionRead, FunctionCreate  # Your Pydantic schemas
-from pydantic import BaseModel
+from pydantic import BaseModel # type: ignore
 from typing import Optional
 import uuid
 import os
 import tempfile
-import docker
+import docker # type: ignore
 import shutil
 import io
 import tarfile
 import logging
 
 # Prometheus client for metrics
-from prometheus_client import Summary, Gauge, make_asgi_app
+from prometheus_client import Summary, Gauge, make_asgi_app # type: ignore
 
 # Set up basic logging
 logging.basicConfig(level=logging.INFO)
