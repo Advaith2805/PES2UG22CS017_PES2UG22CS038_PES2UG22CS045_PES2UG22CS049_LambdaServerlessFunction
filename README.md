@@ -1,7 +1,7 @@
 # Lambda - Serverless Function Execution Platform
 
 ## Project Description
-Lambda is a lightweight serverless function execution platform that allows users to deploy and run functions in an isolated environment. It supports multiple virtualization technologies like Docker and Firecracker to ensure efficient and secure execution.
+Lambda is a lightweight serverless function execution platform that allows users to deploy and run functions in an isolated environment. It supports multiple virtualization technologies like Docker and gVisor to ensure efficient and secure execution.
 
 ## Team Members
 - ABHINAV SANKARSHANA DASU
