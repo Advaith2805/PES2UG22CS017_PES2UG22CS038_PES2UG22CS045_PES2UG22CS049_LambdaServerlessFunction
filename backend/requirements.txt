@@ -5,3 +5,4 @@ docker
 psycopg2-binary
 pydantic
 prometheus_client
+streamlit
