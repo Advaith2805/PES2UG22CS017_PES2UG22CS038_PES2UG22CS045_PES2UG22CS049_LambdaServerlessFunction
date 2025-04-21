@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 5s  # How often Prometheus scrapes targets
+
+scrape_configs:
+  - job_name: "fastapi_server"
+    static_configs:
+      - targets: ["localhost:8000"]  # Replace with your FastAPI host:port
+        labels:
+          service: "my-fastapi-app"
